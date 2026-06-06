@@ -1,2 +1,0 @@
-# IntellMeet-AI-Powered-Enterprise-Meeting-Collaboration-Platform
-IntellMeet – AI-Powered Enterprise Meeting &amp; Collaboration Platform Developed by Zidio Team 2 (Web Development), IntellMeet is an intelligent meeting and collaboration platform designed to enhance team productivity through AI-powered features, seamless communication, meeting management, task tracking, and real-time collaboration tools.
