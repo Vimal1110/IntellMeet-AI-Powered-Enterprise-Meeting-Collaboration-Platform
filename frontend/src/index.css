@@ -1,1 +1,11 @@
 @import "tailwindcss";
+
+html[data-theme="dark"] {
+  background-color: #020617;
+  color: white;
+}
+
+html[data-theme="light"] {
+  background-color: white;
+  color: black;
+}
