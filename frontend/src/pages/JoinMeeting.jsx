@@ -1,47 +1,45 @@
 import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import API from "../services/api";
 
 function JoinMeeting() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [name, setName] = useState("");
   const [meetingCode, setMeetingCode] = useState("");
 
   // User Home se aaya ya Dashboard se
   const from = location.state?.from || "/dashboard";
 
-  const handleJoin = () => {
-    if (!name.trim() || !meetingCode.trim()) {
-      alert("Please enter your Name and Meeting Code");
+  const handleJoin = async () => {
+    if (!meetingCode.trim()) {
+      alert("Please enter Meeting Code");
       return;
     }
 
-    // Direct Meeting Room
-    navigate("/meetingroom", {
-      state: {
-        name,
-        meetingCode,
-        from,
-      },
-    });
+    try {
+      const res = await API.post("/meetings/join", {
+        code: meetingCode,
+      });
+
+      navigate("/meetingroom", {
+        state: {
+          meeting: res.data,
+        },
+      });
+    } catch (error) {
+      console.log(error);
+
+      alert(error.response?.data?.message || "Failed to join meeting");
+    }
   };
 
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center px-4">
       <div className="bg-slate-900 border border-cyan-500 p-8 rounded-2xl shadow-xl w-[420px]">
-
         <h1 className="text-4xl font-bold text-center text-white mb-6">
           Join Meeting
         </h1>
-
-        <input
-          type="text"
-          placeholder="Your Name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="w-full p-3 rounded-lg bg-slate-800 border border-slate-700 text-white mb-4"
-        />
 
         <input
           type="text"
@@ -64,7 +62,6 @@ function JoinMeeting() {
         >
           ← Back
         </button>
-
       </div>
     </div>
   );
