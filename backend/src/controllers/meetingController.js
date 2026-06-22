@@ -42,8 +42,21 @@ export const joinMeeting = async (req, res) => {
   try {
     const { code } = req.body;
 
+    if (!code || !code.trim()) {
+      return res.status(400).json({
+        message: "Meeting code is required",
+      });
+    }
+
+    // FIX: normalize the same way the code is generated (trim whitespace,
+    // uppercase) before querying. Without this, a typed code with a
+    // trailing space, or typed in lowercase, will silently fail to match
+    // an otherwise-correct meetingCode in the DB — findOne is a strict
+    // equality match with no trimming/case-insensitivity by default.
+    const normalizedCode = code.trim().toUpperCase();
+
     const meeting = await Meeting.findOne({
-      meetingCode: code,
+      meetingCode: normalizedCode,
     });
 
     if (!meeting) {
@@ -68,6 +81,7 @@ export const joinMeeting = async (req, res) => {
     });
   }
 };
+
 export const getMeetingById = async (req, res) => {
   try {
     const meeting = await Meeting.findById(req.params.id)

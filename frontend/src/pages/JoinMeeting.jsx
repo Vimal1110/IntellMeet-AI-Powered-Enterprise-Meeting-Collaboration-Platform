@@ -12,14 +12,20 @@ function JoinMeeting() {
   const from = location.state?.from || "/dashboard";
 
   const handleJoin = async () => {
-    if (!meetingCode.trim()) {
+    const trimmedCode = meetingCode.trim();
+
+    if (!trimmedCode) {
       alert("Please enter Meeting Code");
       return;
     }
 
     try {
+      // FIX: send the uppercased, trimmed code. generateMeetingCode() on
+      // the backend always produces uppercase alphanumeric codes, so
+      // normalizing here means what's typed/pasted (including stray
+      // whitespace or lowercase letters) still matches.
       const res = await API.post("/meetings/join", {
-        code: meetingCode,
+        code: trimmedCode.toUpperCase(),
       });
 
       navigate("/meetingroom", {
@@ -45,8 +51,9 @@ function JoinMeeting() {
           type="text"
           placeholder="Meeting Code"
           value={meetingCode}
-          onChange={(e) => setMeetingCode(e.target.value)}
-          className="w-full p-3 rounded-lg bg-slate-800 border border-slate-700 text-white"
+          onChange={(e) => setMeetingCode(e.target.value.toUpperCase())}
+          className="w-full p-3 rounded-lg bg-slate-800 border border-slate-700 text-white uppercase tracking-wider"
+          maxLength={6}
         />
 
         <button
