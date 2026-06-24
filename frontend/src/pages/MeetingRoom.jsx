@@ -27,45 +27,38 @@ function MeetingRoom() {
   const [cameraOn, setCameraOn] = useState(true);
   const [roomFullError, setRoomFullError] = useState(false);
 
-  // ---- Recording state ----
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const [uploadingRecording, setUploadingRecording] = useState(false);
-  const [recordingError, setRecordingError] = useState(null);
-
   // Remote participants, keyed by socketId. Each entry:
   // { socketId, userInfo, stream, connectionState }
+  // This replaces the old single remoteVideoRef/remotePeerConnected model
+  // with a structure that can hold any number of peers.
   const [remoteParticipants, setRemoteParticipants] = useState({});
 
   const localVideoRef = useRef(null);
   const localStream = useRef(null);
+  // Mirrors localStream.current in React state so the attach-effect below
+  // can re-run reliably whenever the stream becomes available, instead of
+  // relying on localVideoRef.current already being non-null at the exact
+  // moment getUserMedia resolves (the same mount-timing race we fixed for
+  // remote tiles).
   const [localVideoStream, setLocalVideoStream] = useState(null);
+  // Surfaces getUserMedia failures (camera in use by another tab/app,
+  // permission denied, no device found) instead of silently leaving a
+  // gray tile with no explanation.
   const [cameraError, setCameraError] = useState(null);
 
-  // Map<socketId, RTCPeerConnection>
+  // Map<socketId, RTCPeerConnection> — one connection per remote peer,
+  // instead of the old single `peerConnection` ref. This is the core
+  // change that makes group calls possible: every peer in the room gets
+  // its own RTCPeerConnection on this client.
   const peerConnections = useRef(new Map());
-  // Map<socketId, RTCIceCandidate[]>
+
+  // Map<socketId, RTCIceCandidate[]> — ICE candidates queued per-peer
+  // until that specific peer's remote description is set.
   const pendingCandidates = useRef(new Map());
-  // Map<socketId, HTMLVideoElement>
+
+  // Map<socketId, HTMLVideoElement> — refs to each remote <video> tile,
+  // set via a ref callback since the number of tiles is dynamic.
   const remoteVideoRefs = useRef(new Map());
-
-  // remoteParticipants mirrored into a ref so the recording draw loop
-  // (running outside React's render cycle via requestAnimationFrame) can
-  // always read current participant info/streams without needing to be
-  // recreated whenever state changes.
-  const remoteParticipantsRef = useRef({});
-  useEffect(() => {
-    remoteParticipantsRef.current = remoteParticipants;
-  }, [remoteParticipants]);
-
-  // ---- Recording internals ----
-  const recordingCanvasRef = useRef(null);
-  const recordingAnimationFrame = useRef(null);
-  const mediaRecorderRef = useRef(null);
-  const recordedChunksRef = useRef([]);
-  const recordingAudioContextRef = useRef(null);
-  const recordingIntervalRef = useRef(null);
-  const recordingStartTimeRef = useRef(null);
 
   const meetingId = location.state?.meetingId || location.state?.meeting?._id;
   const from = location.state?.from || "/dashboard";
@@ -81,6 +74,13 @@ function MeetingRoom() {
   // ---- Create a new RTCPeerConnection for a given remote socket ----
   const createPeerConnection = useCallback(
     (targetSocketId) => {
+      // GUARD: if a connection already exists for this peer (e.g. a
+      // duplicate "existingParticipants"/"newParticipant" event from a
+      // double-fired effect, or a reconnect that the server didn't
+      // clean up yet), close the stale one first instead of silently
+      // orphaning it. An orphaned connection keeps its old ontrack
+      // handler alive and can intermittently fire with no live tracks,
+      // which is what produces a black "ghost" tile.
       const existingPc = peerConnections.current.get(targetSocketId);
       if (existingPc) {
         existingPc.close();
@@ -99,6 +99,9 @@ function MeetingRoom() {
         }
       };
 
+      // Single flat ontrack handler (no nested reassignment). Fires once
+      // per track; since both audio+video tracks for a peer share the
+      // same MediaStream, updating state on every call is safe.
       pc.ontrack = (event) => {
         const stream = event.streams[0];
         if (!stream) return;
@@ -124,6 +127,15 @@ function MeetingRoom() {
             },
           };
         });
+
+        if (
+          pc.iceConnectionState === "failed" ||
+          pc.iceConnectionState === "disconnected"
+        ) {
+          console.log(
+            `Connection to ${targetSocketId} is ${pc.iceConnectionState}`,
+          );
+        }
       };
 
       if (localStream.current) {
@@ -168,222 +180,6 @@ function MeetingRoom() {
     });
   }, []);
 
-  // ==========================================================
-  // ---- RECORDING: canvas video mix + Web Audio mix + MediaRecorder ----
-  // ==========================================================
-
-  const drawRecordingFrame = useCallback(() => {
-    const canvas = recordingCanvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d");
-    const tiles = [
-      { el: localVideoRef.current, label: "You" },
-      ...Array.from(remoteVideoRefs.current.entries()).map(([id, el]) => ({
-        el,
-        label:
-          remoteParticipantsRef.current[id]?.userInfo?.name || "Participant",
-      })),
-    ].filter((t) => t.el && t.el.videoWidth > 0);
-
-    ctx.fillStyle = "#202124";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    if (tiles.length === 0) {
-      recordingAnimationFrame.current =
-        requestAnimationFrame(drawRecordingFrame);
-      return;
-    }
-
-    const cols = tiles.length <= 1 ? 1 : tiles.length <= 4 ? 2 : 3;
-    const rows = Math.ceil(tiles.length / cols);
-    const cellW = canvas.width / cols;
-    const cellH = canvas.height / rows;
-
-    tiles.forEach((tile, i) => {
-      const col = i % cols;
-      const row = Math.floor(i / cols);
-      const x = col * cellW;
-      const y = row * cellH;
-
-      const videoAspect = tile.el.videoWidth / tile.el.videoHeight;
-      const cellAspect = cellW / cellH;
-      let drawW = cellW;
-      let drawH = cellH;
-      let offsetX = 0;
-      let offsetY = 0;
-
-      if (videoAspect > cellAspect) {
-        drawH = cellH;
-        drawW = cellH * videoAspect;
-        offsetX = (cellW - drawW) / 2;
-      } else {
-        drawW = cellW;
-        drawH = cellW / videoAspect;
-        offsetY = (cellH - drawH) / 2;
-      }
-
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(x, y, cellW, cellH);
-      ctx.clip();
-      ctx.drawImage(tile.el, x + offsetX, y + offsetY, drawW, drawH);
-      ctx.restore();
-
-      ctx.fillStyle = "rgba(0,0,0,0.5)";
-      ctx.fillRect(x + 8, y + cellH - 32, 120, 24);
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "14px sans-serif";
-      ctx.fillText(tile.label, x + 14, y + cellH - 15);
-    });
-
-    recordingAnimationFrame.current = requestAnimationFrame(drawRecordingFrame);
-  }, []);
-
-  // Uploads the finished recording to the user's actual backend route:
-  // POST /meetings/:id/recording, multipart field name "recording" —
-  // matching upload.single("recording") in their uploadMiddleware.js.
-  const uploadRecordingBlob = async (blob) => {
-    setUploadingRecording(true);
-    setRecordingError(null);
-
-    try {
-      const formData = new FormData();
-      formData.append(
-        "recording",
-        blob,
-        `meeting-${meetingId}-${Date.now()}.webm`,
-      );
-
-      await API.post(`/meetings/${meetingId}/recording`, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-    } catch (err) {
-      console.log("Recording upload failed:", err);
-      setRecordingError(
-        "Recording finished but upload failed: " +
-          (err.response?.data?.message || err.message),
-      );
-    } finally {
-      setUploadingRecording(false);
-    }
-  };
-
-  const startRecording = useCallback(() => {
-    if (isRecording) return;
-    setRecordingError(null);
-
-    try {
-      const canvas = document.createElement("canvas");
-      canvas.width = 1280;
-      canvas.height = 720;
-      recordingCanvasRef.current = canvas;
-
-      const canvasStream = canvas.captureStream(30);
-
-      // ---- Audio mixing via Web Audio API ----
-      // MediaRecorder reliably takes one audio track, so every
-      // participant's audio must be summed into a single destination
-      // track before recording, rather than attached separately.
-      const audioContext = new (
-        window.AudioContext || window.webkitAudioContext
-      )();
-      recordingAudioContextRef.current = audioContext;
-      const destination = audioContext.createMediaStreamDestination();
-
-      const connectStreamAudio = (stream) => {
-        if (!stream) return;
-        const audioTracks = stream.getAudioTracks();
-        if (audioTracks.length === 0) return;
-        try {
-          const source = audioContext.createMediaStreamSource(
-            new MediaStream(audioTracks),
-          );
-          source.connect(destination);
-        } catch (err) {
-          console.log("Error connecting audio track to mixer:", err);
-        }
-      };
-
-      connectStreamAudio(localStream.current);
-      Object.values(remoteParticipantsRef.current).forEach((p) =>
-        connectStreamAudio(p.stream),
-      );
-
-      const mixedStream = new MediaStream([
-        ...canvasStream.getVideoTracks(),
-        ...destination.stream.getAudioTracks(),
-      ]);
-
-      const mimeType = MediaRecorder.isTypeSupported(
-        "video/webm;codecs=vp9,opus",
-      )
-        ? "video/webm;codecs=vp9,opus"
-        : "video/webm";
-
-      const recorder = new MediaRecorder(mixedStream, { mimeType });
-      recordedChunksRef.current = [];
-
-      recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          recordedChunksRef.current.push(event.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        cancelAnimationFrame(recordingAnimationFrame.current);
-        recordingAudioContextRef.current?.close();
-        clearInterval(recordingIntervalRef.current);
-
-        const blob = new Blob(recordedChunksRef.current, { type: mimeType });
-        await uploadRecordingBlob(blob);
-      };
-
-      recorder.start(1000);
-      mediaRecorderRef.current = recorder;
-
-      recordingStartTimeRef.current = Date.now();
-      setRecordingSeconds(0);
-      recordingIntervalRef.current = setInterval(() => {
-        setRecordingSeconds(
-          Math.floor((Date.now() - recordingStartTimeRef.current) / 1000),
-        );
-      }, 1000);
-
-      drawRecordingFrame();
-      setIsRecording(true);
-    } catch (err) {
-      console.log("Failed to start recording:", err);
-      setRecordingError(
-        "Could not start recording: " + (err.message || "unknown error"),
-      );
-    }
-  }, [isRecording, drawRecordingFrame]);
-
-  const stopRecording = useCallback(() => {
-    if (!isRecording) return;
-    mediaRecorderRef.current?.stop();
-    setIsRecording(false);
-  }, [isRecording]);
-
-  // Stop recording cleanly if the component unmounts mid-recording
-  // (e.g. user navigates away without clicking "Stop").
-  useEffect(() => {
-    return () => {
-      if (
-        mediaRecorderRef.current &&
-        mediaRecorderRef.current.state !== "inactive"
-      ) {
-        mediaRecorderRef.current.stop();
-      }
-      cancelAnimationFrame(recordingAnimationFrame.current);
-      clearInterval(recordingIntervalRef.current);
-      recordingAudioContextRef.current?.close();
-    };
-  }, []);
-
-  // ==========================================================
-
   // ---- Camera/mic setup (runs once) ----
   useEffect(() => {
     let stream;
@@ -409,6 +205,9 @@ function MeetingRoom() {
       } catch (err) {
         console.log(err);
 
+        // Translate common getUserMedia failures into a message that
+        // actually tells the user what to do, instead of a permanently
+        // unexplained gray tile.
         if (err.name === "NotReadableError" || err.name === "TrackStartError") {
           setCameraError(
             "Camera is already in use by another tab or app. Close other tabs using the camera and reload.",
@@ -430,12 +229,19 @@ function MeetingRoom() {
     return () => {
       cancelled = true;
       stream?.getTracks().forEach((track) => track.stop());
+      // Close every peer connection on unmount, not just one.
       peerConnections.current.forEach((pc) => pc.close());
       peerConnections.current.clear();
       pendingCandidates.current.clear();
     };
   }, []);
 
+  // Safety net for the local video element: re-attach srcObject whenever
+  // the stream or the ref changes. This catches the case where the
+  // <video> element wasn't mounted yet at the moment getUserMedia
+  // resolved (e.g. briefly hidden behind a loading state) — the direct
+  // assignment above would silently no-op, but this effect re-runs and
+  // catches up as soon as both exist.
   useEffect(() => {
     if (localVideoRef.current && localVideoStream) {
       localVideoRef.current.srcObject = localVideoStream;
@@ -472,7 +278,10 @@ function MeetingRoom() {
     return () => socket.off("existingParticipants", handleExistingParticipants);
   }, [createPeerConnection, meetingId]);
 
-  // ---- newParticipant ----
+  // ---- newParticipant: someone else joined; just render a placeholder.
+  // We do NOT create an offer here — the new joiner initiates the offer
+  // to us (see existingParticipants above), avoiding the classic
+  // "both sides create an offer simultaneously" glare problem. ----
   useEffect(() => {
     const handleNewParticipant = ({ socketId, userInfo }) => {
       setRemoteParticipants((prev) => ({
@@ -485,7 +294,7 @@ function MeetingRoom() {
     return () => socket.off("newParticipant", handleNewParticipant);
   }, []);
 
-  // ---- Offer received ----
+  // ---- Offer received from a specific peer ----
   useEffect(() => {
     const handleOffer = async (data) => {
       const { fromSocketId, offer } = data;
@@ -516,7 +325,7 @@ function MeetingRoom() {
     return () => socket.off("offer", handleOffer);
   }, [createPeerConnection, meetingId]);
 
-  // ---- Answer received ----
+  // ---- Answer received from a specific peer ----
   useEffect(() => {
     const handleAnswer = async (data) => {
       const { fromSocketId, answer } = data;
@@ -539,7 +348,7 @@ function MeetingRoom() {
     return () => socket.off("answer", handleAnswer);
   }, []);
 
-  // ---- ICE candidate received ----
+  // ---- ICE candidate received from a specific peer ----
   useEffect(() => {
     const handleIceCandidate = async (data) => {
       const { fromSocketId, candidate } = data;
@@ -642,24 +451,7 @@ function MeetingRoom() {
     setCameraOn(enabled);
   };
 
-  const handleLeave = async () => {
-    // If a recording is in progress, stop it and wait for the upload to
-    // finish before navigating away — navigating immediately would
-    // unmount the component while the async onstop/upload handler is
-    // still running, risking a lost or truncated recording.
-    if (isRecording && mediaRecorderRef.current) {
-      await new Promise((resolve) => {
-        const recorder = mediaRecorderRef.current;
-        const originalOnStop = recorder.onstop;
-        recorder.onstop = async (event) => {
-          await originalOnStop(event);
-          resolve();
-        };
-        recorder.stop();
-        setIsRecording(false);
-      });
-    }
-
+  const handleLeave = () => {
     localStream.current?.getTracks().forEach((track) => track.stop());
     peerConnections.current.forEach((pc) => pc.close());
     peerConnections.current.clear();
@@ -667,7 +459,8 @@ function MeetingRoom() {
   };
 
   // Ref callback: attaches a remote stream to its <video> element as soon
-  // as both the element and stream exist.
+  // as both the element and stream exist, sidestepping the React-mount
+  // race condition (element not yet mounted when ontrack fires).
   const setRemoteVideoRef = (socketId, stream) => (el) => {
     if (el) {
       remoteVideoRefs.current.set(socketId, el);
@@ -680,8 +473,10 @@ function MeetingRoom() {
   };
 
   const remoteList = Object.values(remoteParticipants);
-  const tileCount = remoteList.length + 1;
+  const tileCount = remoteList.length + 1; // + local tile
 
+  // Grid layout that mimics Meet's auto-arranging tile grid: column count
+  // grows with participant count rather than using a fixed 2-col split.
   const gridColsClass =
     tileCount <= 1
       ? "grid-cols-1"
@@ -690,14 +485,6 @@ function MeetingRoom() {
         : tileCount <= 4
           ? "grid-cols-2"
           : "grid-cols-3";
-
-  const formatDuration = (totalSeconds) => {
-    const m = Math.floor(totalSeconds / 60)
-      .toString()
-      .padStart(2, "0");
-    const s = (totalSeconds % 60).toString().padStart(2, "0");
-    return `${m}:${s}`;
-  };
 
   if (roomFullError) {
     return (
@@ -738,33 +525,13 @@ function MeetingRoom() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          {isRecording && (
-            <span className="flex items-center gap-2 text-sm bg-[#3c4043] px-3 py-1.5 rounded-full">
-              <span className="w-2 h-2 rounded-full bg-[#ea4335] animate-pulse" />
-              Recording {formatDuration(recordingSeconds)}
-            </span>
-          )}
-          {uploadingRecording && (
-            <span className="text-sm text-gray-400">
-              Uploading recording...
-            </span>
-          )}
-
-          <button
-            onClick={handleLeave}
-            className="bg-[#ea4335] hover:bg-[#d33a2c] text-sm px-4 py-2 rounded-full font-medium"
-          >
-            Leave call
-          </button>
-        </div>
+        <button
+          onClick={handleLeave}
+          className="bg-[#ea4335] hover:bg-[#d33a2c] text-sm px-4 py-2 rounded-full font-medium"
+        >
+          Leave call
+        </button>
       </div>
-
-      {recordingError && (
-        <div className="bg-[#ea4335]/20 border-b border-[#ea4335] text-sm px-6 py-2 text-red-200">
-          {recordingError}
-        </div>
-      )}
 
       {/* Main area: video grid + optional side panel */}
       <div className="flex-1 flex overflow-hidden">
@@ -951,14 +718,8 @@ function MeetingRoom() {
         </button>
 
         <button
-          onClick={isRecording ? stopRecording : startRecording}
-          disabled={uploadingRecording}
-          className={`w-12 h-12 rounded-full flex items-center justify-center text-lg ${
-            isRecording
-              ? "bg-[#ea4335] animate-pulse"
-              : "bg-[#3c4043] hover:bg-[#4a4d4f]"
-          } ${uploadingRecording ? "opacity-50 cursor-not-allowed" : ""}`}
-          title={isRecording ? "Stop recording" : "Start recording"}
+          className="w-12 h-12 rounded-full bg-[#3c4043] hover:bg-[#4a4d4f] flex items-center justify-center text-lg"
+          title="Record (not yet implemented)"
         >
           ⏺
         </button>

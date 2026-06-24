@@ -16,6 +16,7 @@ function Dashboard() {
   });
 
   const [meetings, setMeetings] = useState([]);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -52,8 +53,15 @@ function Dashboard() {
         <h1 className="text-3xl font-bold text-cyan-400">
           IntelliMeet
         </h1>
+        <div className="md:hidden flex justify-end w-full">
+       <button
+          onClick={() => setMenuOpen(!menuOpen)}
+           className="text-3xl text-cyan-400">
+           ☰
+        </button>
+        </div>
 
-        <div className="flex flex-wrap justify-center gap-3">
+        <div className="hidden md:flex flex-wrap justify-center gap-3">
           <button
             onClick={() => navigate("/notifications")}
             className={`px-4 py-2 rounded-lg ${
@@ -91,14 +99,45 @@ function Dashboard() {
           </button>
         </div>
       </div>
+      {menuOpen && (
+  <div className="md:hidden flex flex-col gap-3 mt-4">
+    <button
+      onClick={() => navigate("/notifications")}
+      className="bg-cyan-500 px-4 py-2 rounded-lg text-white"
+    >
+      Notifications
+    </button>
 
-      <div className="p-8">
+    <button
+      onClick={() => navigate("/analytics")}
+      className="bg-purple-500 px-4 py-2 rounded-lg text-white"
+    >
+      Analytics
+    </button>
+
+    <button
+      onClick={() => navigate("/profile")}
+      className="bg-slate-700 px-4 py-2 rounded-lg text-white"
+    >
+      Profile
+    </button>
+
+    <button
+      onClick={() => navigate("/")}
+      className="bg-red-500 px-4 py-2 rounded-lg text-white"
+    >
+      Logout
+    </button>
+  </div>
+)}
+
+      <div className="p-8 md:p-8">
         <h2 className="text-3xl md:text-4xl font-bold mb-8">
           {t("dashboard")}
         </h2>
 
         {/* Stats Cards */}
-        <div className="grid md:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1md:grid-cols-4 gap-4 md:gap-6">
           <div
             className={`p-6 rounded-xl ${
               theme === "dark"
@@ -240,6 +279,7 @@ function Dashboard() {
               </thead>
 
               <tbody>
+
                 { 
                 meetings
                 .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))

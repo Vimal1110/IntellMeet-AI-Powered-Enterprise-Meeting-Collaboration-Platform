@@ -93,15 +93,16 @@ function Notifications() {
   return (
     <div className="min-h-screen bg-slate-950 text-white p-10">
       {/* Header */}
-      <div className="flex justify-between items-center mb-8">
-        <h1 className="text-5xl font-bold">Notifications</h1>
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold">Notifications</h1>
 
         <div className="flex gap-3">
           <button
             onClick={() => navigate("/dashboard")}
             className="bg-cyan-500 hover:bg-cyan-600 px-4 py-2 rounded-lg font-semibold"
           >
-            ← Dashboard
+            <span className="md:hidden">←</span>
+            <span className="hidden md:inline">← Dashboard</span>
           </button>
 
           {notifications.length > 0 && (
