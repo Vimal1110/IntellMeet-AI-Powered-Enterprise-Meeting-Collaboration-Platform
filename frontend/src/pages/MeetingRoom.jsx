@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from "react-router-dom";
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
 import API from "../services/api";
 import socket from "../socket";
 
@@ -20,6 +20,52 @@ const ICE_SERVERS = [
     : []),
 ];
 
+// Keep the local MediaStream outside React's component lifecycle.
+// Vite Fast Refresh recreates React effects on Ctrl+S; without this shared
+// reference, the cleanup would stop the camera and then getUserMedia() would
+// start it again, causing the camera OFF -> ON notification.
+const LOCAL_STREAM_KEY = "__intelliMeetLocalStream";
+
+const getSharedLocalStream = () => {
+  if (typeof window === "undefined" || typeof MediaStream === "undefined") {
+    return null;
+  }
+
+  const stream = window[LOCAL_STREAM_KEY];
+
+  if (!(stream instanceof MediaStream)) return null;
+
+  const hasLiveTrack = stream.getTracks().some(
+    (track) => track.readyState === "live"
+  );
+
+  if (!stream.active || !hasLiveTrack) {
+    delete window[LOCAL_STREAM_KEY];
+    return null;
+  }
+
+  return stream;
+};
+
+const saveSharedLocalStream = (stream) => {
+  if (typeof window !== "undefined") {
+    window[LOCAL_STREAM_KEY] = stream;
+  }
+};
+
+const stopSharedLocalStream = () => {
+  if (typeof window === "undefined") return;
+
+  const stream = window[LOCAL_STREAM_KEY];
+
+  if (stream instanceof MediaStream) {
+    stream.getTracks().forEach((track) => track.stop());
+  }
+
+  delete window[LOCAL_STREAM_KEY];
+};
+
+
 function MeetingRoom() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -37,9 +83,11 @@ function MeetingRoom() {
   const [cameraError, setCameraError] = useState(null);
   const [meetingError, setMeetingError] = useState(null);
   const [mediaReady, setMediaReady] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
 
   const localVideoRef = useRef(null);
   const localStream = useRef(null);
+  const screenStream = useRef(null);
 
   // One RTCPeerConnection per remote participant.
   const peerConnections = useRef(new Map());
@@ -79,15 +127,24 @@ function MeetingRoom() {
           );
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: "user",
-          },
-          audio: true,
-        });
+        // Reuse the current stream when Vite Fast Refresh re-runs this effect.
+        // This is the important fix for Ctrl+S: we do NOT stop the physical
+        // camera just because React refreshed this component.
+        let stream = getSharedLocalStream();
+
+        if (!stream) {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: "user",
+            },
+            audio: true,
+          });
+
+          saveSharedLocalStream(stream);
+        }
 
         if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
+          // Do not stop this stream. A Fast Refresh may immediately reuse it.
           return;
         }
 
@@ -96,12 +153,19 @@ function MeetingRoom() {
         setMediaReady(true);
         setCameraError(null);
 
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
+        const video = localVideoRef.current;
+
+        if (video) {
+          video.srcObject = stream;
+          video.muted = true;
+          video.autoplay = true;
+          video.playsInline = true;
+
           try {
-            await localVideoRef.current.play();
-          } catch {
-            // Browser may require the element to finish mounting first.
+            await video.play();
+          } catch (err) {
+            // The attachment effect below retries after the video element mounts.
+            console.debug("Local video play will retry:", err?.message);
           }
         }
       } catch (err) {
@@ -128,8 +192,7 @@ function MeetingRoom() {
           );
         }
 
-        // Do not permanently block the meeting if the camera is unavailable.
-        // We still allow the room to join.
+        // Do not permanently block the meeting if media is unavailable.
         setMediaReady(true);
       }
     };
@@ -139,55 +202,55 @@ function MeetingRoom() {
     return () => {
       cancelled = true;
 
-      if (localStream.current) {
-        localStream.current.getTracks().forEach((track) => track.stop());
-        localStream.current = null;
-      }
+      // IMPORTANT:
+      // Vite Fast Refresh executes effect cleanup when MeetingRoom.jsx is
+      // saved. Stopping tracks here causes the camera OFF -> ON notification.
+      // We intentionally keep the stream alive. It is stopped explicitly by
+      // handleLeave() or when the browser page is closed.
+      localStream.current = null;
 
-      setLocalVideoStream(null);
-      setMediaReady(false);
-
-      peerConnections.current.forEach((pc) => pc.close());
-      peerConnections.current.clear();
-      pendingCandidates.current.clear();
+      // Do not close WebRTC peers here either. Fast Refresh should not tear
+      // down the current meeting connection.
     };
   }, []);
 
-  // Always attach the local MediaStream after React has mounted the video.
-  useEffect(() => {
-  const video = localVideoRef.current;
+  // Attach the current MediaStream whenever React has mounted/updated the
+  // <video> element. This replaces the noisy NULL checks from the old code.
+  useLayoutEffect(() => {
+    const video = localVideoRef.current;
+    const stream = localVideoStream;
 
-  console.log("🎥 LOCAL VIDEO EFFECT");
-  console.log("Video element:", video);
-  console.log("Local stream:", localVideoStream);
-  console.log("Stream tracks:", localVideoStream?.getTracks());
+    if (!video || !stream) return;
 
-  if (!video) {
-    console.log("❌ localVideoRef.current is NULL");
-    return;
-  }
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
+    }
 
-  if (!localVideoStream) {
-    console.log("❌ localVideoStream is NULL");
-    return;
-  }
+    video.muted = true;
+    video.autoplay = true;
+    video.playsInline = true;
 
-  video.srcObject = localVideoStream;
-
-  console.log("✅ srcObject attached:", video.srcObject);
-
-  video.muted = true;
-  video.autoplay = true;
-  video.playsInline = true;
-
-  video.play()
-    .then(() => {
-      console.log("✅ LOCAL VIDEO PLAYING");
-    })
-    .catch((err) => {
-      console.error("❌ VIDEO PLAY ERROR:", err);
+    video.play().catch((err) => {
+      console.debug("Local video play retry:", err?.message);
     });
-}, [localVideoStream]);
+  }, [localVideoStream, meeting]);
+
+  // Stop the shared stream when the browser page itself is closed/refreshed.
+  useEffect(() => {
+    const stopOnPageClose = () => {
+      screenStream.current?.getTracks().forEach((track) => track.stop());
+      screenStream.current = null;
+      stopSharedLocalStream();
+    };
+
+    window.addEventListener("beforeunload", stopOnPageClose);
+    window.addEventListener("pagehide", stopOnPageClose);
+
+    return () => {
+      window.removeEventListener("beforeunload", stopOnPageClose);
+      window.removeEventListener("pagehide", stopOnPageClose);
+    };
+  }, []);
 
   // ------------------------------------------------------------
   // Peer connection helper
@@ -207,12 +270,11 @@ function MeetingRoom() {
         iceServers: ICE_SERVERS,
       });
 
-      // IMPORTANT:
-      // Add local tracks immediately. The old implementation could create
-      // the PeerConnection before getUserMedia finished, resulting in an
-      // offer with no video track and therefore a blank remote tile.
+      // Add the current local tracks immediately. If screen sharing is
+      // active, send the screen video track instead of the camera video track.
+      // Audio always continues to come from the camera/microphone stream.
       if (localStream.current) {
-        localStream.current.getTracks().forEach((track) => {
+        localStream.current.getAudioTracks().forEach((track) => {
           const alreadyAdded = pc
             .getSenders()
             .some((sender) => sender.track === track);
@@ -221,6 +283,21 @@ function MeetingRoom() {
             pc.addTrack(track, localStream.current);
           }
         });
+
+        const videoTrack =
+          screenStream.current?.getVideoTracks()?.[0] ||
+          localStream.current.getVideoTracks()?.[0];
+
+        if (videoTrack) {
+          const alreadyAdded = pc
+            .getSenders()
+            .some((sender) => sender.track === videoTrack);
+
+          if (!alreadyAdded) {
+            const videoSource = screenStream.current || localStream.current;
+            pc.addTrack(videoTrack, videoSource);
+          }
+        }
       }
 
       pc.onicecandidate = (event) => {
@@ -696,18 +773,140 @@ function MeetingRoom() {
   };
 
   // ------------------------------------------------------------
+  // Screen sharing
+  // ------------------------------------------------------------
+  const stopScreenShare = useCallback(() => {
+    const stream = screenStream.current;
+
+    if (!stream) return;
+
+    const cameraTrack = localStream.current?.getVideoTracks()?.[0];
+
+    // Put the camera track back into every existing peer connection.
+    peerConnections.current.forEach((pc) => {
+      const sender = pc
+        .getSenders()
+        .find((item) => item.track?.kind === "video");
+
+      if (sender && cameraTrack) {
+        sender.replaceTrack(cameraTrack).catch((err) => {
+          console.error("Could not restore camera track:", err);
+        });
+      }
+    });
+
+    stream.getTracks().forEach((track) => {
+      track.onended = null;
+      track.stop();
+    });
+
+    screenStream.current = null;
+    setIsScreenSharing(false);
+
+    // Restore the local preview to the camera.
+    if (localStream.current) {
+      setLocalVideoStream(localStream.current);
+    }
+  }, []);
+
+  const startScreenShare = async () => {
+    if (screenStream.current) return;
+
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      setCameraError("Screen sharing is not supported by this browser.");
+      return;
+    }
+
+    try {
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          cursor: "always",
+        },
+        audio: false,
+      });
+
+      const screenTrack = displayStream.getVideoTracks()?.[0];
+
+      if (!screenTrack) {
+        displayStream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      screenStream.current = displayStream;
+
+      // The browser's native "Stop sharing" button ends this track.
+      screenTrack.onended = () => {
+        stopScreenShare();
+      };
+
+      // Replace the camera video sender with the screen video sender.
+      peerConnections.current.forEach((pc) => {
+        const sender = pc
+          .getSenders()
+          .find((item) => item.track?.kind === "video");
+
+        if (sender) {
+          sender.replaceTrack(screenTrack).catch((err) => {
+            console.error("Could not start screen sharing for peer:", err);
+          });
+        }
+      });
+
+      setIsScreenSharing(true);
+
+      // Show the shared screen in the local "You" tile too.
+      setLocalVideoStream(displayStream);
+    } catch (err) {
+      // User closing the browser picker is normal and should not show an error.
+      if (err?.name !== "AbortError" && err?.name !== "NotAllowedError") {
+        console.error("Screen sharing error:", err);
+        setCameraError(
+          "Could not start screen sharing. Please try again."
+        );
+      }
+    }
+  };
+
+  const toggleScreenShare = () => {
+    if (isScreenSharing) {
+      stopScreenShare();
+    } else {
+      startScreenShare();
+    }
+  };
+
+  // ------------------------------------------------------------
   // Leave meeting
   // ------------------------------------------------------------
   const handleLeave = () => {
     hasJoinedRoom.current = false;
+    joiningRoom.current = false;
 
-    localStream.current?.getTracks().forEach((track) => track.stop());
+    // Stop screen sharing first, then explicitly release camera/microphone
+    // when the user really leaves the meeting.
+    if (screenStream.current) {
+      screenStream.current.getTracks().forEach((track) => {
+        track.onended = null;
+        track.stop();
+      });
+      screenStream.current = null;
+    }
+
+    setIsScreenSharing(false);
+    stopSharedLocalStream();
     localStream.current = null;
 
-    peerConnections.current.forEach((pc) => pc.close());
+    peerConnections.current.forEach((pc) => {
+      pc.ontrack = null;
+      pc.onicecandidate = null;
+      pc.close();
+    });
     peerConnections.current.clear();
     pendingCandidates.current.clear();
+    remoteVideoRefs.current.clear();
 
+    setLocalVideoStream(null);
+    setMediaReady(false);
     setRemoteParticipants({});
 
     navigate(from);
@@ -753,7 +952,7 @@ function MeetingRoom() {
         </p>
 
         <button
-          onClick={() => navigate(from)}
+          onClick={handleLeave}
           className="bg-[#3c4043] hover:bg-[#4a4d4f] px-5 py-2 rounded-full"
         >
           Go back
@@ -769,7 +968,7 @@ function MeetingRoom() {
         <p className="text-sm text-gray-400">{meetingError}</p>
 
         <button
-          onClick={() => navigate(from)}
+          onClick={handleLeave}
           className="bg-[#3c4043] hover:bg-[#4a4d4f] px-5 py-2 rounded-full"
         >
           Go back
@@ -841,6 +1040,12 @@ function MeetingRoom() {
             <span className="absolute bottom-2 left-3 text-sm bg-black/40 px-2 py-0.5 rounded">
               You {!micOn && "🔇"}
             </span>
+
+            {isScreenSharing && (
+              <span className="absolute top-2 left-2 text-xs bg-black/60 px-2 py-1 rounded">
+                🖥 Sharing screen
+              </span>
+            )}
           </div>
 
           {/* Remote tiles */}
@@ -981,10 +1186,16 @@ function MeetingRoom() {
         </button>
 
         <button
-          className="w-12 h-12 rounded-full bg-[#3c4043] hover:bg-[#4a4d4f] flex items-center justify-center text-lg"
-          title="Share screen (not yet implemented)"
+          onClick={toggleScreenShare}
+          className={`w-12 h-12 rounded-full flex items-center justify-center text-lg ${
+            isScreenSharing
+              ? "bg-[#ea4335] hover:bg-[#d33a2c]"
+              : "bg-[#3c4043] hover:bg-[#4a4d4f]"
+          }`}
+          title={isScreenSharing ? "Stop sharing" : "Share screen"}
+          aria-label={isScreenSharing ? "Stop sharing" : "Share screen"}
         >
-          🖥
+          {isScreenSharing ? "⏹" : "🖥"}
         </button>
 
         <button
