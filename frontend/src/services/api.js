@@ -13,5 +13,9 @@ API.interceptors.request.use((config) => {
 
   return config;
 });
+export const generateAISummary = async (meetingId) => {
+  const response = await API.post(`/ai/meetings/${meetingId}/summary`);
+  return response.data;
+};
 
 export default API;

@@ -16,6 +16,7 @@ function Dashboard() {
   });
 
   const [meetings, setMeetings] = useState([]);
+  const [aiNotes, setAiNotes] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -25,7 +26,24 @@ function Dashboard() {
         setStats(statsRes.data);
 
         const meetingsRes = await API.get("/meetings");
-        setMeetings(meetingsRes.data);
+
+        const meetingData = Array.isArray(meetingsRes.data)
+          ? meetingsRes.data
+          : meetingsRes.data.meetings || [];
+
+        setMeetings(meetingData);
+
+        // Count meetings that have an AI-generated summary
+        const summaryCount = meetingData.filter((meeting) => {
+          return (
+            meeting.aiSummary ||
+            meeting.summary ||
+            meeting.aiNotes ||
+            meeting.hasSummary === true
+          );
+        }).length;
+
+        setAiNotes(summaryCount);
       } catch (error) {
         console.log("Dashboard Error:", error);
       }
@@ -45,29 +63,27 @@ function Dashboard() {
       {/* Navbar */}
       <div
         className={`flex flex-col md:flex-row justify-between items-center gap-4 px-4 md:px-8 py-5 border-b ${
-          theme === "dark"
-            ? "border-slate-800"
-            : "border-gray-300"
+          theme === "dark" ? "border-slate-800" : "border-gray-300"
         }`}
       >
         <h1 className="text-3xl font-bold text-cyan-400">
           IntelliMeet
         </h1>
+
         <div className="md:hidden flex justify-end w-full">
-       <button
-          onClick={() => setMenuOpen(!menuOpen)}
-           className="text-3xl text-cyan-400">
-           ☰
-        </button>
+          <button
+            onClick={() => setMenuOpen(!menuOpen)}
+            className="text-3xl text-cyan-400"
+          >
+            ☰
+          </button>
         </div>
 
         <div className="hidden md:flex flex-wrap justify-center gap-3">
           <button
             onClick={() => navigate("/notifications")}
             className={`px-4 py-2 rounded-lg ${
-              theme === "dark"
-                ? "bg-slate-800"
-                : "bg-gray-200"
+              theme === "dark" ? "bg-slate-800" : "bg-gray-200"
             }`}
           >
             {t("notifications")}
@@ -90,46 +106,46 @@ function Dashboard() {
           <button
             onClick={() => navigate("/profile")}
             className={`px-4 py-2 rounded-lg ${
-              theme === "dark"
-                ? "bg-slate-800"
-                : "bg-gray-200"
+              theme === "dark" ? "bg-slate-800" : "bg-gray-200"
             }`}
           >
             {t("profile")}
           </button>
         </div>
       </div>
+
+      {/* Mobile Menu */}
       {menuOpen && (
-  <div className="md:hidden flex flex-col gap-3 mt-4">
-    <button
-      onClick={() => navigate("/notifications")}
-      className="bg-cyan-500 px-4 py-2 rounded-lg text-white"
-    >
-      Notifications
-    </button>
+        <div className="md:hidden flex flex-col gap-3 mt-4 px-4">
+          <button
+            onClick={() => navigate("/notifications")}
+            className="bg-cyan-500 px-4 py-2 rounded-lg text-white"
+          >
+            Notifications
+          </button>
 
-    <button
-      onClick={() => navigate("/analytics")}
-      className="bg-purple-500 px-4 py-2 rounded-lg text-white"
-    >
-      Analytics
-    </button>
+          <button
+            onClick={() => navigate("/analytics")}
+            className="bg-purple-500 px-4 py-2 rounded-lg text-white"
+          >
+            Analytics
+          </button>
 
-    <button
-      onClick={() => navigate("/profile")}
-      className="bg-slate-700 px-4 py-2 rounded-lg text-white"
-    >
-      Profile
-    </button>
+          <button
+            onClick={() => navigate("/profile")}
+            className="bg-slate-700 px-4 py-2 rounded-lg text-white"
+          >
+            Profile
+          </button>
 
-    <button
-      onClick={() => navigate("/")}
-      className="bg-red-500 px-4 py-2 rounded-lg text-white"
-    >
-      Logout
-    </button>
-  </div>
-)}
+          <button
+            onClick={() => navigate("/")}
+            className="bg-red-500 px-4 py-2 rounded-lg text-white"
+          >
+            Logout
+          </button>
+        </div>
+      )}
 
       <div className="p-8 md:p-8">
         <h2 className="text-3xl md:text-4xl font-bold mb-8">
@@ -137,7 +153,8 @@ function Dashboard() {
         </h2>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1md:grid-cols-4 gap-4 md:gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-6">
+          {/* Total Meetings */}
           <div
             className={`p-6 rounded-xl ${
               theme === "dark"
@@ -148,11 +165,13 @@ function Dashboard() {
             <h3 className="text-gray-400">
               {t("totalMeetings")}
             </h3>
+
             <p className="text-4xl font-bold mt-3">
               {stats.totalMeetings}
             </p>
           </div>
 
+          {/* Live Meetings */}
           <div
             className={`p-6 rounded-xl ${
               theme === "dark"
@@ -163,11 +182,13 @@ function Dashboard() {
             <h3 className="text-gray-400">
               {t("liveMeetings")}
             </h3>
+
             <p className="text-4xl font-bold mt-3">
               {stats.liveMeetings}
             </p>
           </div>
 
+          {/* Participants */}
           <div
             className={`p-6 rounded-xl ${
               theme === "dark"
@@ -178,11 +199,13 @@ function Dashboard() {
             <h3 className="text-gray-400">
               {t("participants")}
             </h3>
+
             <p className="text-4xl font-bold mt-3">
               {stats.participants}
             </p>
           </div>
 
+          {/* AI Notes */}
           <div
             className={`p-6 rounded-xl ${
               theme === "dark"
@@ -193,8 +216,9 @@ function Dashboard() {
             <h3 className="text-gray-400">
               {t("aiNotes")}
             </h3>
+
             <p className="text-4xl font-bold mt-3">
-              18
+              {aiNotes}
             </p>
           </div>
         </div>
@@ -269,9 +293,11 @@ function Dashboard() {
                   <th className="p-4 text-left">
                     {t("meeting")}
                   </th>
+
                   <th className="p-4 text-left">
                     {t("date")}
                   </th>
+
                   <th className="p-4 text-left">
                     {t("status")}
                   </th>
@@ -279,34 +305,37 @@ function Dashboard() {
               </thead>
 
               <tbody>
+                {meetings
+                  .sort(
+                    (a, b) =>
+                      new Date(b.createdAt) -
+                      new Date(a.createdAt)
+                  )
+                  .slice(0, 8)
+                  .map((meeting) => (
+                    <tr
+                      key={meeting._id}
+                      className={`border-t ${
+                        theme === "dark"
+                          ? "border-slate-800"
+                          : "border-gray-300"
+                      }`}
+                    >
+                      <td className="p-4">
+                        {meeting.title}
+                      </td>
 
-                { 
-                meetings
-                .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-                .slice(0, 8).map((meeting) => (
-                  <tr
-                    key={meeting._id}
-                    className={`border-t ${
-                      theme === "dark"
-                        ? "border-slate-800"
-                        : "border-gray-300"
-                    }`}
-                  >
-                    <td className="p-4">
-                      {meeting.title}
-                    </td>
+                      <td className="p-4">
+                        {new Date(
+                          meeting.createdAt
+                        ).toLocaleDateString()}
+                      </td>
 
-                    <td className="p-4">
-                      {new Date(
-                        meeting.createdAt
-                      ).toLocaleDateString()}
-                    </td>
-
-                    <td className="p-4 text-yellow-500">
-                      {meeting.status}
-                    </td>
-                  </tr>
-                ))}
+                      <td className="p-4 text-yellow-500">
+                        {meeting.status}
+                      </td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
           </div>

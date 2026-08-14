@@ -84,10 +84,15 @@ function MeetingRoom() {
   const [meetingError, setMeetingError] = useState(null);
   const [mediaReady, setMediaReady] = useState(false);
   const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingError, setRecordingError] = useState(null);
 
   const localVideoRef = useRef(null);
   const localStream = useRef(null);
   const screenStream = useRef(null);
+  const mediaRecorder = useRef(null);
+  const recordingChunks = useRef([]);
+  const recordingSource = useRef(null);
 
   // One RTCPeerConnection per remote participant.
   const peerConnections = useRef(new Map());
@@ -775,10 +780,248 @@ function MeetingRoom() {
   // ------------------------------------------------------------
   // Screen sharing
   // ------------------------------------------------------------
+  // ------------------------------------------------------------
+  // Meeting recording
+  // ------------------------------------------------------------
+  const getSupportedRecordingMimeType = () => {
+    if (typeof MediaRecorder === "undefined") return "";
+
+    const mimeTypes = [
+      "video/webm;codecs=vp9,opus",
+      "video/webm;codecs=vp8,opus",
+      "video/webm",
+    ];
+
+    return mimeTypes.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+  };
+
+ const uploadRecording = async (blob) => {
+  if (!blob || blob.size === 0) {
+    setRecordingError("The recording is empty. Please try again.");
+    return;
+  }
+
+  if (!meetingId) {
+    setRecordingError("Meeting ID is missing.");
+    return;
+  }
+
+  try {
+    setRecordingError(null);
+
+    const formData = new FormData();
+
+    formData.append(
+      "recording",
+      blob,
+      `${meeting?.title || "IntelliMeet-Meeting"}.webm`
+    );
+
+    const response = await API.post(
+      `/meetings/${meetingId}/recording`,
+      formData,
+      {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+      }
+    );
+
+    console.log("Recording uploaded successfully:", response.data);
+
+    // Update local meeting state immediately
+    setMeeting((prev) => ({
+      ...prev,
+      recordingUrl:
+        response.data?.recordingUrl ||
+        response.data?.meeting?.recordingUrl ||
+        prev?.recordingUrl ||
+        "",
+      isRecorded: true,
+    }));
+
+    // Optional browser download
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    const title = String(meeting?.title || "IntelliMeet-Meeting")
+      .replace(/[<>:"/\\|?*]+/g, "-")
+      .replace(/\s+/g, "-")
+      .slice(0, 80);
+
+    link.href = url;
+    link.download = `${title}-${new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")}.webm`;
+
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    console.error("RECORDING UPLOAD ERROR:", error);
+
+    setRecordingError(
+      error?.response?.data?.message ||
+        "Recording upload failed. Please try again."
+    );
+  }
+};
+
+  const stopRecording = useCallback(() => {
+    const recorder = mediaRecorder.current;
+
+    if (!recorder) {
+      setIsRecording(false);
+      recordingSource.current = null;
+      return;
+    }
+
+    if (recorder.state === "inactive") {
+      mediaRecorder.current = null;
+      setIsRecording(false);
+      recordingSource.current = null;
+      return;
+    }
+
+    recorder.stop();
+  }, []);
+
+  const startRecording = useCallback(() => {
+    setRecordingError(null);
+
+    if (typeof MediaRecorder === "undefined") {
+      setRecordingError("Recording is not supported by this browser.");
+      return;
+    }
+
+    if (mediaRecorder.current?.state === "recording") return;
+
+    const cameraStream = localStream.current;
+    const screen = screenStream.current;
+
+    // Record the currently visible local source:
+    // - screen + microphone when screen sharing is active
+    // - camera + microphone otherwise
+    const videoTrack = screen?.getVideoTracks()?.[0] ||
+      cameraStream?.getVideoTracks()?.[0];
+
+    const audioTrack = cameraStream?.getAudioTracks()?.[0];
+    console.log("AUDIO TRACK:", audioTrack);
+    console.log("AUDIO TRACK ENABLED:", audioTrack?.enabled);
+    console.log("AUDIO TRACK STATE:", audioTrack?.readyState);
+
+    if (!videoTrack) {
+      setRecordingError(
+        "No video stream is available. Please turn on your camera or start screen sharing."
+      );
+      return;
+    }
+
+    // The recording must contain both video and microphone audio.
+    // Do not silently create a video-only recording when the microphone
+    // track is missing or inactive.
+    if (!audioTrack) {
+      setRecordingError(
+        "Microphone audio is not available. Please allow microphone access and reload the meeting."
+      );
+      return;
+    }
+
+    if (audioTrack.readyState !== "live") {
+      setRecordingError(
+        "Microphone audio track is not active. Please turn the microphone on and try again."
+      );
+      return;
+    }
+
+    // Make sure the microphone track is enabled when recording starts.
+    // This prevents a muted/disabled track from producing a silent recording.
+    audioTrack.enabled = true;
+    setMicOn(true);
+
+    const recordingStream = new MediaStream([
+      videoTrack,
+      audioTrack,
+    ]);
+    const mimeType = getSupportedRecordingMimeType();
+
+    try {
+      const options = mimeType ? { mimeType } : undefined;
+      const recorder = new MediaRecorder(recordingStream, options);
+
+      recordingChunks.current = [];
+      recordingSource.current = screen ? "screen" : "camera";
+      mediaRecorder.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordingChunks.current.push(event.data);
+        }
+      };
+
+      recorder.onerror = (event) => {
+        console.error("MediaRecorder error:", event.error);
+        setRecordingError(
+          "Recording stopped because the browser could not continue recording."
+        );
+        setIsRecording(false);
+        recordingSource.current = null;
+        mediaRecorder.current = null;
+      };
+
+      recorder.onstop = async () => {
+  const chunks = recordingChunks.current;
+
+  const blobType =
+    recorder.mimeType || mimeType || "video/webm";
+
+  const blob = new Blob(chunks, {
+    type: blobType,
+  });
+
+  recordingChunks.current = [];
+  mediaRecorder.current = null;
+  recordingSource.current = null;
+  setIsRecording(false);
+
+  // Upload recording to backend
+  await uploadRecording(blob);
+};
+
+      recorder.start(1000);
+      setIsRecording(true);
+    } catch (err) {
+      console.error("Could not start recording:", err);
+      mediaRecorder.current = null;
+      recordingSource.current = null;
+      setIsRecording(false);
+      setRecordingError(
+        "Could not start recording. Please check your browser permissions and try again."
+      );
+    }
+  }, [meeting?.title]);
+
+  const toggleRecording = () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
+
   const stopScreenShare = useCallback(() => {
     const stream = screenStream.current;
 
     if (!stream) return;
+
+    // A MediaRecorder cannot safely switch its video track after recording
+    // starts. If the recording was using the shared screen, finish that
+    // recording cleanly before restoring the camera.
+    if (recordingSource.current === "screen") {
+      stopRecording();
+    }
 
     const cameraTrack = localStream.current?.getVideoTracks()?.[0];
 
@@ -880,6 +1123,12 @@ function MeetingRoom() {
   // ------------------------------------------------------------
   const handleLeave = () => {
     hasJoinedRoom.current = false;
+
+    // Finish an active recording before leaving the meeting so the file is
+    // finalized and downloaded instead of being lost.
+    if (mediaRecorder.current?.state === "recording") {
+      mediaRecorder.current.stop();
+    }
     joiningRoom.current = false;
 
     // Stop screen sharing first, then explicitly release camera/microphone
@@ -1159,6 +1408,21 @@ function MeetingRoom() {
         )}
       </div>
 
+      {recordingError && (
+        <div className="px-4 pb-2 flex justify-center">
+          <div className="bg-[#3c4043] border border-[#5f6368] rounded-lg px-4 py-2 text-sm text-gray-200">
+            {recordingError}
+            <button
+              onClick={() => setRecordingError(null)}
+              className="ml-3 text-gray-400 hover:text-white"
+              aria-label="Dismiss recording error"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Bottom Controls */}
       <div className="flex justify-center items-center gap-2 py-3 flex-wrap">
         <button
@@ -1229,10 +1493,16 @@ function MeetingRoom() {
         </button>
 
         <button
-          className="w-12 h-12 rounded-full bg-[#3c4043] hover:bg-[#4a4d4f] flex items-center justify-center text-lg"
-          title="Record (not yet implemented)"
+          onClick={toggleRecording}
+          className={`w-12 h-12 rounded-full flex items-center justify-center text-lg ${
+            isRecording
+              ? "bg-[#ea4335] hover:bg-[#d33a2c]"
+              : "bg-[#3c4043] hover:bg-[#4a4d4f]"
+          }`}
+          title={isRecording ? "Stop recording" : "Start recording"}
+          aria-label={isRecording ? "Stop recording" : "Start recording"}
         >
-          ⏺
+          {isRecording ? "⏹" : "⏺"}
         </button>
 
         <button

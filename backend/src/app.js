@@ -6,6 +6,7 @@ import authRoutes from "./routes/authRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
 import analyticsRoutes from "./routes/AnalyticsRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
+import aiRoutes from "./routes/aiRoutes.js";
 const app = express();
 
 app.use(express.json());
@@ -27,5 +28,7 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/analytics", analyticsRoutes);
 
 app.use("/api/notifications", notificationRoutes);
+
+app.use("/api/ai", aiRoutes);
 
 export default app;
