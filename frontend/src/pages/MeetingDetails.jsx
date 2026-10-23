@@ -85,6 +85,9 @@ function MeetingDetails() {
       setMeeting((prev) => ({
         ...prev,
         aiSummary: data.summary,
+        transcript: data.transcript || prev?.transcript || "",
+        aiAnalysis: data.analysis || prev?.aiAnalysis || {},
+        aiStatus: "completed",
       }));
     } catch (err) {
       console.error("AI SUMMARY ERROR:", err);
@@ -300,23 +303,73 @@ function MeetingDetails() {
           {/* AI SUMMARY */}
 
           {meeting.aiSummary ? (
-            <div className="mt-6 bg-slate-900 rounded-lg p-6 border border-slate-700">
-              <h4 className="text-lg font-semibold text-purple-300 mb-4">
-                Generated Summary
-              </h4>
+            <div className="mt-6 space-y-6">
+              <div className="bg-slate-900 rounded-lg p-6 border border-slate-700">
+                <h4 className="text-lg font-semibold text-purple-300 mb-4">
+                  Generated Summary
+                </h4>
+                <div className="text-slate-300 whitespace-pre-wrap leading-7">
+                  {meeting.aiAnalysis?.overview || meeting.aiSummary}
+                </div>
+              </div>
 
-              <div className="text-slate-300 whitespace-pre-wrap leading-7">
-                {meeting.aiSummary}
+              <div className="grid md:grid-cols-2 gap-4">
+                <div className="bg-slate-900 rounded-lg p-5 border border-slate-700">
+                  <h4 className="font-semibold text-cyan-300 mb-3">⭐ Key Points</h4>
+                  {meeting.aiAnalysis?.keyPoints?.length ? (
+                    <ul className="space-y-2 text-slate-300">
+                      {meeting.aiAnalysis.keyPoints.map((item, index) => (
+                        <li key={`${item}-${index}`}>• {item}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-slate-500">No key points identified.</p>
+                  )}
+                </div>
+
+                <div className="bg-slate-900 rounded-lg p-5 border border-slate-700">
+                  <h4 className="font-semibold text-green-300 mb-3">✅ Decisions</h4>
+                  {meeting.aiAnalysis?.decisions?.length ? (
+                    <ul className="space-y-2 text-slate-300">
+                      {meeting.aiAnalysis.decisions.map((item, index) => (
+                        <li key={`${item}-${index}`}>• {item}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-slate-500">No decisions identified.</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-slate-900 rounded-lg p-5 border border-slate-700">
+                <h4 className="font-semibold text-yellow-300 mb-3">📌 Action Items</h4>
+                {meeting.aiAnalysis?.actionItems?.length ? (
+                  <div className="space-y-3">
+                    {meeting.aiAnalysis.actionItems.map((item, index) => (
+                      <div key={`${item.task}-${index}`} className="bg-slate-800 rounded-lg p-4">
+                        <p className="font-semibold">{item.task}</p>
+                        <p className="text-sm text-slate-400 mt-2">
+                          Assignee: {item.assignee || "Unassigned"} · Deadline: {item.deadline || "Not specified"}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-slate-500">No action items identified.</p>
+                )}
+              </div>
+
+              <div className="bg-slate-900 rounded-lg p-5 border border-slate-700">
+                <h4 className="font-semibold text-cyan-300 mb-3">📝 Complete Transcript</h4>
+                <div className="max-h-72 overflow-y-auto text-slate-300 whitespace-pre-wrap leading-7">
+                  {meeting.transcript || "Transcript not available."}
+                </div>
               </div>
             </div>
           ) : (
             <div className="mt-6 bg-slate-900/60 rounded-lg p-6 text-center">
               <p className="text-slate-500">
-                No AI summary generated yet.
-              </p>
-
-              <p className="text-slate-600 text-sm mt-2">
-                Click "Generate AI Summary" to create one.
+                No AI analysis generated yet. A recorded meeting can be analyzed automatically after recording, or you can generate it here.
               </p>
             </div>
           )}

@@ -104,7 +104,7 @@ function Login() {
             </h1>
 
             <p className="text-gray-400 mt-2">
-              Sign in to continue to IntelliMeet
+              Sign in to continue to IntellMeet
             </p>
           </div>
 

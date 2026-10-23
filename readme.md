@@ -1,4 +1,4 @@
-# 🚀 IntelliMeet - AI Powered Enterprise Meeting & Collaboration Platform
+# 🚀 IntellMeet - AI Powered Enterprise Meeting & Collaboration Platform
 
 <p align="center">
   <img src="https://img.shields.io/badge/MERN-Stack-green" />
@@ -19,7 +19,7 @@
 
 ## 📌 Overview
 
-IntelliMeet is a modern enterprise meeting and collaboration platform built using the MERN Stack, WebRTC, and Socket.IO.
+IntellMeet is a modern enterprise meeting and collaboration platform built using the MERN Stack, WebRTC, and Socket.IO.
 
 The platform enables teams to create meetings, join using unique meeting codes, communicate through real-time video conferencing, exchange messages instantly, record meetings, and manage meeting history through a professional dashboard.
 
@@ -105,7 +105,7 @@ Real-Time Layer:
 ## 📂 Project Structure
 
 ```bash
-IntelliMeet/
+IntellMeet/
 │
 ├── frontend/
 │   ├── src/

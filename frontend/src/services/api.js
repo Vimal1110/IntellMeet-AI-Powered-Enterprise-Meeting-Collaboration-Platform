@@ -18,4 +18,32 @@ export const generateAISummary = async (meetingId) => {
   return response.data;
 };
 
+export const transcribeMeetingChunk = async (meetingId, audioBlob, chunkIndex) => {
+  const formData = new FormData();
+
+  formData.append(
+    "audio",
+    audioBlob,
+    `meeting-${meetingId}-audio-${chunkIndex}.webm`,
+  );
+  formData.append("chunkIndex", String(chunkIndex));
+
+  const response = await API.post(
+    `/ai/meetings/${meetingId}/transcript-chunk`,
+    formData,
+    {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    },
+  );
+
+  return response.data;
+};
+
+export const finalizeMeetingAI = async (meetingId) => {
+  const response = await API.post(`/ai/meetings/${meetingId}/finalize`);
+  return response.data;
+};
+
 export default API;

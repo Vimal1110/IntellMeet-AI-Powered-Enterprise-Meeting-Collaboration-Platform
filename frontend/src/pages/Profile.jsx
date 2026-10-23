@@ -156,7 +156,7 @@ function Profile() {
           </h1>
 
           <p className="text-slate-400 mt-2">
-            Manage your IntelliMeet account information
+            Manage your IntellMeet account information
           </p>
         </div>
 
@@ -379,7 +379,7 @@ function Profile() {
             </h2>
 
             <p className="text-slate-400 text-sm mb-5">
-              Manage your IntelliMeet preferences
+              Manage your IntellMeet preferences
             </p>
 
             <div className="space-y-4">
@@ -460,7 +460,7 @@ function Profile() {
           </h2>
 
           <p className="text-slate-400 mt-1 mb-6">
-            Your recent IntelliMeet activity
+            Your recent IntellMeet activity
           </p>
 
           <div className="space-y-4">
@@ -495,7 +495,7 @@ function Profile() {
                 </p>
 
                 <p className="text-sm text-slate-400">
-                  You are currently an active IntelliMeet member
+                  You are currently an active IntellMeet member
                 </p>
               </div>
 

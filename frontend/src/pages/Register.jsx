@@ -170,7 +170,7 @@ function Register() {
             </h1>
 
             <p className="text-gray-400 mt-2">
-              Join IntelliMeet and start collaborating
+              Join IntellMeet and start collaborating
             </p>
           </div>
 
@@ -360,7 +360,7 @@ function Register() {
 
         {/* Footer */}
         <p className="text-center text-gray-600 text-xs mt-5">
-          © {new Date().getFullYear()} IntelliMeet. All rights reserved.
+          © {new Date().getFullYear()} IntellMeet. All rights reserved.
         </p>
       </div>
     </div>

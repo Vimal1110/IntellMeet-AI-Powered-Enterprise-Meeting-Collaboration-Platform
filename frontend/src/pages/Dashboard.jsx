@@ -67,7 +67,7 @@ function Dashboard() {
         }`}
       >
         <h1 className="text-3xl font-bold text-cyan-400">
-          IntelliMeet
+          IntellMeet
         </h1>
 
         <div className="md:hidden flex justify-end w-full">

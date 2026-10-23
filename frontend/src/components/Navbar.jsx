@@ -13,7 +13,7 @@ function Navbar() {
     <nav className="px-4 md:px-8 py-6">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-cyan-400 cursor-pointer">
-          IntelliMeet
+          IntellMeet
         </h1>
 
         {/* Desktop Menu */}

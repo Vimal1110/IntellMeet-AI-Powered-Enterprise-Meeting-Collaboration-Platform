@@ -3,14 +3,18 @@ import { useLocation, useNavigate } from "react-router-dom";
 function AISummary() {
   const navigate = useNavigate();
   const location = useLocation();
-
   const meeting = location.state?.meeting || null;
 
-  // ================= DATE =================
+  const analysis = meeting?.aiAnalysis || {};
+  const keyPoints = Array.isArray(analysis.keyPoints) ? analysis.keyPoints : [];
+  const decisions = Array.isArray(analysis.decisions) ? analysis.decisions : [];
+  const actionItems = Array.isArray(analysis.actionItems)
+    ? analysis.actionItems
+    : [];
+  const keywords = Array.isArray(analysis.keywords) ? analysis.keywords : [];
 
   const formatDate = (date) => {
     if (!date) return "—";
-
     try {
       return new Date(date).toLocaleDateString("en-GB", {
         day: "numeric",
@@ -22,130 +26,115 @@ function AISummary() {
     }
   };
 
-  // ================= DURATION =================
-
   const formatDuration = (minutes) => {
-    if (!minutes || Number(minutes) <= 0) {
-      return "0 Minutes";
-    }
-
-    return `${minutes} Minute${
-      Number(minutes) === 1 ? "" : "s"
-    }`;
+    if (!minutes || Number(minutes) <= 0) return "0 Minutes";
+    return `${minutes} Minute${Number(minutes) === 1 ? "" : "s"}`;
   };
 
-  // ================= PARTICIPANTS =================
+  const participantCount = meeting?.participants?.length || 0;
 
-  const participantCount =
-    meeting?.participants?.length || 0;
-
-  // ================= COPY SUMMARY =================
-
-  const handleCopy = () => {
-    if (!meeting?.aiSummary) {
-      alert("No AI summary available to copy.");
+  const handleCopy = async () => {
+    if (!meeting?.aiSummary && !meeting?.transcript) {
+      alert("No AI analysis available to copy.");
       return;
     }
 
-    navigator.clipboard
-      .writeText(meeting.aiSummary)
-      .then(() => {
-        alert("AI Summary copied!");
-      })
-      .catch(() => {
-        alert("Failed to copy summary.");
-      });
+    const text = [
+      "INTELLMEET AI MEETING ANALYSIS",
+      "",
+      "SUMMARY",
+      analysis.overview || meeting.aiSummary || "No summary available.",
+      "",
+      "KEY POINTS",
+      ...keyPoints.map((item) => `• ${item}`),
+      "",
+      "DECISIONS",
+      ...decisions.map((item) => `• ${item}`),
+      "",
+      "ACTION ITEMS",
+      ...actionItems.map(
+        (item) =>
+          `• ${item.task} | Assignee: ${item.assignee || "Unassigned"} | Deadline: ${item.deadline || "Not specified"}`,
+      ),
+      "",
+      "FULL TRANSCRIPT",
+      meeting.transcript || "Transcript not available.",
+    ].join("\n");
+
+    try {
+      await navigator.clipboard.writeText(text);
+      alert("AI meeting analysis copied!");
+    } catch {
+      alert("Failed to copy the analysis.");
+    }
   };
 
-  // ================= DOWNLOAD SUMMARY =================
-
   const handleDownload = () => {
-    if (!meeting?.aiSummary) {
-      alert("No AI summary available to download.");
+    if (!meeting?.aiSummary && !meeting?.transcript) {
+      alert("No AI analysis available to download.");
       return;
     }
 
     const summaryText = `
 INTELLMEET
-AI MEETING SUMMARY
+AI MEETING ANALYSIS
 ========================================
 
 MEETING INFORMATION
 ========================================
 
-Meeting:
-${meeting?.title || "Meeting"}
-
-Date:
-${formatDate(
-      meeting?.endedAt ||
-        meeting?.startedAt ||
-        meeting?.createdAt
-    )}
-
-Duration:
-${formatDuration(meeting?.duration)}
-
-Participants:
-${participantCount} ${
-      participantCount === 1 ? "Member" : "Members"
-    }
-
-Status:
-${meeting?.status || "—"}
-
-Meeting Code:
-${meeting?.meetingCode || "—"}
-
-Created By:
-${
-  meeting?.createdBy?.name ||
-  meeting?.createdBy?.email ||
-  "Unknown"
-}
-
-Description:
-${meeting?.description || "No description"}
-
+Meeting: ${meeting?.title || "Meeting"}
+Date: ${formatDate(meeting?.endedAt || meeting?.startedAt || meeting?.createdAt)}
+Duration: ${formatDuration(meeting?.duration)}
+Participants: ${participantCount} ${participantCount === 1 ? "Member" : "Members"}
+Status: ${meeting?.status || "—"}
+Meeting Code: ${meeting?.meetingCode || "—"}
+Created By: ${meeting?.createdBy?.name || meeting?.createdBy?.email || "Unknown"}
 
 ========================================
-AI GENERATED SUMMARY
+AI SUMMARY
 ========================================
 
-${meeting.aiSummary}
-
+${analysis.overview || meeting?.aiSummary || "No summary available."}
 
 ========================================
-PARTICIPANTS
+KEY POINTS
+========================================
+
+${keyPoints.length ? keyPoints.map((item) => `• ${item}`).join("\n") : "No key points identified."}
+
+========================================
+DECISIONS
+========================================
+
+${decisions.length ? decisions.map((item) => `• ${item}`).join("\n") : "No decisions identified."}
+
+========================================
+ACTION ITEMS
 ========================================
 
 ${
-  meeting?.participants?.length > 0
-    ? meeting.participants
+  actionItems.length
+    ? actionItems
         .map(
-          (participant, index) =>
-            `${index + 1}. ${
-              participant?.name ||
-              participant?.email ||
-              "Unknown User"
-            }`
+          (item) =>
+            `• ${item.task} | Assignee: ${item.assignee || "Unassigned"} | Deadline: ${item.deadline || "Not specified"}`,
         )
         .join("\n")
-    : "No participants recorded."
+    : "No action items identified."
 }
 
+========================================
+FULL TRANSCRIPT
+========================================
+
+${meeting?.transcript || "Transcript not available."}
 
 ========================================
 KEYWORDS
 ========================================
 
-React
-Node.js
-MongoDB
-WebRTC
-Socket.io
-AI Summary
-
+${keywords.length ? keywords.join(", ") : "No keywords identified."}
 
 ========================================
 Generated by IntelliMeet
@@ -155,498 +144,192 @@ Generated by IntelliMeet
     const blob = new Blob([summaryText], {
       type: "text/plain;charset=utf-8",
     });
-
     const url = URL.createObjectURL(blob);
-
     const link = document.createElement("a");
-
     link.href = url;
-
-    const fileName = `${meeting?.title || "Meeting"}-AI-Summary.txt`
+    link.download = `${meeting?.title || "Meeting"}-AI-Analysis.txt`
       .replace(/[^a-z0-9-_ ]/gi, "")
       .replace(/\s+/g, "-");
-
-    link.download = fileName;
-
     document.body.appendChild(link);
-
     link.click();
-
-    document.body.removeChild(link);
-
-    URL.revokeObjectURL(url);
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  // ================= UI =================
+  if (!meeting) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white gap-4">
+        <p className="text-red-400">No meeting selected.</p>
+        <button
+          onClick={() => navigate("/meeting-history")}
+          className="bg-cyan-500 hover:bg-cyan-600 px-5 py-2 rounded-lg"
+        >
+          ← Back to History
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-white p-4 md:p-8">
-
-      {/* ================= HEADER ================= */}
-
-      <div className="flex justify-between items-start mb-8">
-
-        {/* LEFT - TITLE */}
-
+      <div className="flex justify-between items-start mb-8 gap-4">
         <div className="flex items-center gap-3">
-
-          <div className="text-4xl">
-            🤖
-          </div>
-
+          <div className="text-4xl">🤖</div>
           <div>
-            <h1 className="text-3xl md:text-4xl font-bold">
-              AI Meeting Summary
-            </h1>
-
+            <h1 className="text-3xl md:text-4xl font-bold">AI Meeting Analysis</h1>
             <p className="text-slate-400 mt-1">
-              AI-powered analysis of your meeting
+              Speech-to-text transcript and AI-powered meeting insights
             </p>
           </div>
-
         </div>
-
-
-        {/* RIGHT - BACK BUTTON */}
 
         <button
           onClick={() => navigate(-1)}
-          className="bg-cyan-500 hover:bg-cyan-600 transition px-6 py-3 rounded-lg font-semibold"
+          className="bg-cyan-500 hover:bg-cyan-600 transition px-5 py-3 rounded-lg font-semibold shrink-0"
         >
           ← Back
         </button>
-
       </div>
 
-
-      {/* ================= MEETING INFORMATION ================= */}
-
       <div className="bg-slate-900 rounded-2xl p-6 mb-6 border border-slate-800 shadow-lg">
-
-        <div className="flex items-center gap-3 mb-6">
-
-          <div className="text-2xl">
-            📋
-          </div>
-
-          <div>
-            <h2 className="text-2xl font-bold">
-              Meeting Information
-            </h2>
-
-            <p className="text-slate-400 text-sm">
-              Basic information about this meeting
-            </p>
-          </div>
-
-        </div>
-
-
+        <h2 className="text-2xl font-bold mb-5">📋 Meeting Information</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-
-          {/* Meeting */}
-
-          <div className="bg-slate-800 p-5 rounded-xl border border-slate-700">
-
-            <p className="text-slate-400 text-sm mb-2">
-              Meeting
-            </p>
-
-            <h3 className="font-bold text-lg">
-              {meeting?.title || "Meeting"}
-            </h3>
-
-          </div>
-
-
-          {/* Duration */}
-
-          <div className="bg-slate-800 p-5 rounded-xl border border-slate-700">
-
-            <p className="text-slate-400 text-sm mb-2">
-              Duration
-            </p>
-
-            <h3 className="font-bold text-lg">
-              {formatDuration(meeting?.duration)}
-            </h3>
-
-          </div>
-
-
-          {/* Participants */}
-
-          <div className="bg-slate-800 p-5 rounded-xl border border-slate-700">
-
-            <p className="text-slate-400 text-sm mb-2">
-              Participants
-            </p>
-
-            <h3 className="font-bold text-lg">
-              {participantCount}{" "}
-              {participantCount === 1
-                ? "Member"
-                : "Members"}
-            </h3>
-
-          </div>
-
-
-          {/* Date */}
-
-          <div className="bg-slate-800 p-5 rounded-xl border border-slate-700">
-
-            <p className="text-slate-400 text-sm mb-2">
-              Date
-            </p>
-
-            <h3 className="font-bold text-lg">
-              {formatDate(
-                meeting?.endedAt ||
-                  meeting?.startedAt ||
-                  meeting?.createdAt
-              )}
-            </h3>
-
-          </div>
-
+          {[
+            ["Meeting", meeting.title || "Meeting"],
+            ["Duration", formatDuration(meeting.duration)],
+            ["Participants", `${participantCount} ${participantCount === 1 ? "Member" : "Members"}`],
+            ["Date", formatDate(meeting.endedAt || meeting.startedAt || meeting.createdAt)],
+          ].map(([label, value]) => (
+            <div key={label} className="bg-slate-800 p-5 rounded-xl border border-slate-700">
+              <p className="text-slate-400 text-sm mb-2">{label}</p>
+              <p className="font-bold text-lg">{value}</p>
+            </div>
+          ))}
         </div>
-
       </div>
 
-
-      {/* ================= AI GENERATED SUMMARY ================= */}
-
-      <div className="bg-slate-900 rounded-2xl p-6 mb-6 border border-slate-800 shadow-lg">
-
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
-
-          <div className="flex items-center gap-3">
-
-            <div className="text-2xl">
-              🧠
-            </div>
-
-            <div>
-              <h2 className="text-2xl font-bold">
-                AI Generated Summary
-              </h2>
-
-              <p className="text-slate-400 text-sm">
-                Generated using AI from meeting information
-              </p>
-            </div>
-
+      <div className="bg-slate-900 rounded-2xl p-6 mb-6 border border-purple-500/30 shadow-lg">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="text-3xl">🧠</div>
+          <div>
+            <h2 className="text-2xl font-bold">AI Generated Summary</h2>
+            <p className="text-slate-400 text-sm">
+              Generated from the actual meeting transcript, not only meeting metadata
+            </p>
           </div>
-
-
-          {meeting?.aiSummary && (
-            <div className="bg-green-500/10 border border-green-500/30 text-green-400 px-4 py-2 rounded-lg text-sm font-medium">
-              ✓ AI Generated
-            </div>
-          )}
-
         </div>
-
-
-        {/* SUMMARY CONTENT */}
 
         <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
-
-          {meeting?.aiSummary ? (
-
-            <div className="text-slate-200 leading-8 whitespace-pre-wrap">
-              {meeting.aiSummary}
-            </div>
-
-          ) : (
-
-            <div className="text-center py-8">
-
-              <div className="text-4xl mb-4">
-                📝
-              </div>
-
-              <h3 className="text-xl font-bold mb-2">
-                No AI Summary Available
-              </h3>
-
-              <p className="text-slate-400">
-                Generate an AI summary from the
-                Meeting Details page to view it here.
-              </p>
-
-            </div>
-
-          )}
-
-        </div>
-
-      </div>
-
-
-      {/* ================= MEETING OVERVIEW ================= */}
-
-      <div className="bg-slate-900 rounded-2xl p-6 mb-6 border border-slate-800 shadow-lg">
-
-        <div className="flex items-center gap-3 mb-6">
-
-          <div className="text-2xl">
-            📊
-          </div>
-
-          <div>
-            <h2 className="text-2xl font-bold">
-              Meeting Overview
-            </h2>
-
-            <p className="text-slate-400 text-sm">
-              Information used by the AI assistant
-            </p>
-          </div>
-
-        </div>
-
-
-        <div className="grid md:grid-cols-2 gap-4">
-
-          {/* Meeting Code */}
-
-          <div className="bg-slate-800 rounded-xl p-5">
-
-            <p className="text-slate-400 text-sm mb-2">
-              Meeting Code
-            </p>
-
-            <p className="font-semibold">
-              {meeting?.meetingCode || "—"}
-            </p>
-
-          </div>
-
-
-          {/* Status */}
-
-          <div className="bg-slate-800 rounded-xl p-5">
-
-            <p className="text-slate-400 text-sm mb-2">
-              Status
-            </p>
-
-            <p
-              className={`font-semibold ${
-                meeting?.status === "Completed"
-                  ? "text-green-400"
-                  : meeting?.status === "Live"
-                    ? "text-red-400"
-                    : "text-yellow-400"
-              }`}
-            >
-              {meeting?.status || "—"}
-            </p>
-
-          </div>
-
-
-          {/* Created By */}
-
-          <div className="bg-slate-800 rounded-xl p-5">
-
-            <p className="text-slate-400 text-sm mb-2">
-              Created By
-            </p>
-
-            <p className="font-semibold">
-              {meeting?.createdBy?.name ||
-                meeting?.createdBy?.email ||
-                "Unknown"}
-            </p>
-
-          </div>
-
-
-          {/* Description */}
-
-          <div className="bg-slate-800 rounded-xl p-5">
-
-            <p className="text-slate-400 text-sm mb-2">
-              Description
-            </p>
-
-            <p className="font-semibold">
-              {meeting?.description ||
-                "No description"}
-            </p>
-
-          </div>
-
-        </div>
-
-      </div>
-
-
-      {/* ================= PARTICIPANTS ================= */}
-
-      <div className="bg-slate-900 rounded-2xl p-6 mb-6 border border-slate-800 shadow-lg">
-
-        <div className="flex items-center gap-3 mb-6">
-
-          <div className="text-2xl">
-            👥
-          </div>
-
-          <div>
-            <h2 className="text-2xl font-bold">
-              Participants
-            </h2>
-
-            <p className="text-slate-400 text-sm">
-              Members associated with this meeting
-            </p>
-          </div>
-
-        </div>
-
-
-        {meeting?.participants?.length > 0 ? (
-
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-
-            {meeting.participants.map(
-              (participant, index) => (
-
-                <div
-                  key={
-                    participant?._id || index
-                  }
-                  className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex items-center gap-3"
-                >
-
-                  <div className="w-10 h-10 rounded-full bg-cyan-500/20 flex items-center justify-center">
-                    👤
-                  </div>
-
-                  <div>
-
-                    <p className="font-semibold">
-                      {participant?.name ||
-                        participant?.email ||
-                        "Unknown User"}
-                    </p>
-
-                    {participant?.email && (
-                      <p className="text-xs text-slate-400">
-                        {participant.email}
-                      </p>
-                    )}
-
-                  </div>
-
-                </div>
-
-              )
-            )}
-
-          </div>
-
-        ) : (
-
-          <p className="text-slate-500">
-            No participants recorded.
+          <p className="text-slate-200 leading-8 whitespace-pre-wrap">
+            {analysis.overview || meeting.aiSummary || "No AI summary available."}
           </p>
-
-        )}
-
+        </div>
       </div>
 
-
-      {/* ================= KEYWORDS ================= */}
-
-      <div className="bg-slate-900 rounded-2xl p-6 mb-6 border border-slate-800 shadow-lg">
-
-        <div className="flex items-center gap-3 mb-6">
-
-          <div className="text-2xl">
-            🔑
-          </div>
-
-          <div>
-            <h2 className="text-2xl font-bold">
-              Keywords
-            </h2>
-
-            <p className="text-slate-400 text-sm">
-              Technologies and topics related to this meeting
-            </p>
-          </div>
-
+      <div className="grid lg:grid-cols-2 gap-6 mb-6">
+        <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800">
+          <h2 className="text-2xl font-bold mb-5">⭐ Important Key Points</h2>
+          {keyPoints.length ? (
+            <ul className="space-y-3">
+              {keyPoints.map((item, index) => (
+                <li key={`${item}-${index}`} className="bg-slate-800 rounded-lg p-4 text-slate-200">
+                  <span className="text-cyan-400 mr-2">•</span>{item}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-slate-500">No key points identified from the transcript.</p>
+          )}
         </div>
 
+        <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800">
+          <h2 className="text-2xl font-bold mb-5">✅ Decisions</h2>
+          {decisions.length ? (
+            <ul className="space-y-3">
+              {decisions.map((item, index) => (
+                <li key={`${item}-${index}`} className="bg-slate-800 rounded-lg p-4 text-slate-200">
+                  <span className="text-green-400 mr-2">✓</span>{item}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-slate-500">No decisions identified from the transcript.</p>
+          )}
+        </div>
+      </div>
 
+      <div className="bg-slate-900 rounded-2xl p-6 mb-6 border border-slate-800">
+        <h2 className="text-2xl font-bold mb-5">📌 Action Items</h2>
+        {actionItems.length ? (
+          <div className="grid md:grid-cols-2 gap-4">
+            {actionItems.map((item, index) => (
+              <div key={`${item.task}-${index}`} className="bg-slate-800 rounded-xl p-5 border border-slate-700">
+                <p className="font-semibold text-white">{item.task}</p>
+                <div className="grid grid-cols-2 gap-3 mt-4 text-sm">
+                  <div>
+                    <p className="text-slate-500">Assignee</p>
+                    <p className="text-cyan-300">{item.assignee || "Unassigned"}</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-500">Deadline</p>
+                    <p className="text-yellow-300">{item.deadline || "Not specified"}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-slate-500">No action items identified from the transcript.</p>
+        )}
+      </div>
+
+      <div className="bg-slate-900 rounded-2xl p-6 mb-6 border border-slate-800">
+        <h2 className="text-2xl font-bold mb-5">📝 Complete Meeting Transcript</h2>
+        <div className="bg-slate-800 rounded-xl p-6 border border-slate-700 max-h-[500px] overflow-y-auto">
+          {meeting.transcript ? (
+            <p className="text-slate-200 leading-8 whitespace-pre-wrap">{meeting.transcript}</p>
+          ) : (
+            <p className="text-slate-500">No transcript is available for this meeting.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="bg-slate-900 rounded-2xl p-6 mb-6 border border-slate-800">
+        <h2 className="text-2xl font-bold mb-5">🔑 AI Extracted Keywords</h2>
         <div className="flex flex-wrap gap-3">
-
-          {[
-            "React",
-            "Node.js",
-            "MongoDB",
-            "WebRTC",
-            "Socket.io",
-            "AI Summary",
-          ].map((keyword) => (
-
+          {(keywords.length ? keywords : ["No keywords identified"]).map((keyword) => (
             <span
               key={keyword}
               className="bg-cyan-500/20 border border-cyan-400/30 text-cyan-300 px-4 py-2 rounded-full font-medium"
             >
               {keyword}
             </span>
-
           ))}
-
         </div>
-
       </div>
 
-
-      {/* ================= ACTION BUTTONS ================= */}
-
-      <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800 shadow-lg">
-
-        <div className="flex flex-wrap gap-4">
-
-          {/* Download Summary */}
-
+      <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800 flex flex-wrap gap-4">
+        <button
+          onClick={handleDownload}
+          className="bg-green-500 hover:bg-green-600 px-6 py-3 rounded-lg font-semibold"
+        >
+          📥 Download AI Analysis
+        </button>
+        <button
+          onClick={handleCopy}
+          className="bg-cyan-500 hover:bg-cyan-600 px-6 py-3 rounded-lg font-semibold"
+        >
+          📋 Copy Analysis
+        </button>
+        {meeting.recordingUrl && (
           <button
-            onClick={handleDownload}
-            disabled={!meeting?.aiSummary}
-            className={`px-6 py-3 rounded-lg font-semibold transition ${
-              meeting?.aiSummary
-                ? "bg-green-500 hover:bg-green-600"
-                : "bg-gray-600 opacity-60 cursor-not-allowed"
-            }`}
+            onClick={() => navigate("/recording", { state: { meeting } })}
+            className="bg-red-500 hover:bg-red-600 px-6 py-3 rounded-lg font-semibold"
           >
-            📥 Download Summary
+            🎥 Watch Recording
           </button>
-
-
-          {/* Copy Summary */}
-
-          <button
-            onClick={handleCopy}
-            disabled={!meeting?.aiSummary}
-            className={`px-6 py-3 rounded-lg font-semibold transition ${
-              meeting?.aiSummary
-                ? "bg-cyan-500 hover:bg-cyan-600"
-                : "bg-gray-600 opacity-60 cursor-not-allowed"
-            }`}
-          >
-            📋 Copy Summary
-          </button>
-
-        </div>
-
+        )}
       </div>
-
     </div>
   );
 }

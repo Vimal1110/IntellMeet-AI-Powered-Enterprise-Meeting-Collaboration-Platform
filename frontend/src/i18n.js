@@ -17,7 +17,7 @@ const resources = {
       createMeeting: "Create Meeting",
       joinMeeting: "Join Meeting",
 
-      aboutTitle: "About IntelliMeet",
+      aboutTitle: "About IntellMeet",
       pricingPlans: "Pricing Plans",
 
       basic: "Basic",
@@ -133,7 +133,7 @@ const resources = {
         scheduleMeetingsDesc: "Schedule meetings in advance and manage them easily.",
 
         aboutText:
-          "IntelliMeet is an AI-powered meeting platform that helps teams collaborate effectively through video meetings, automated summaries and smart productivity tools.",
+          "IntellMeet is an AI-powered meeting platform that helps teams collaborate effectively through video meetings, automated summaries and smart productivity tools.",
 
 
         minutes: "min",

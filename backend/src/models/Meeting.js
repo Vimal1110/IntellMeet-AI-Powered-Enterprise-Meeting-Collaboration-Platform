@@ -63,6 +63,53 @@ const meetingSchema = new mongoose.Schema(
       default: false,
     },
 
+    // Complete speech-to-text transcript generated from the meeting audio.
+    transcript: {
+      type: String,
+      default: "",
+    },
+
+    transcriptChunks: [
+      {
+        index: { type: Number, required: true },
+        text: { type: String, required: true },
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
+
+    transcriptStatus: {
+      type: String,
+      enum: ["idle", "processing", "completed", "failed"],
+      default: "idle",
+    },
+
+    aiAnalysis: {
+      overview: { type: String, default: "" },
+      keyPoints: { type: [String], default: [] },
+      decisions: { type: [String], default: [] },
+      actionItems: {
+        type: [
+          {
+            task: { type: String, default: "" },
+            assignee: { type: String, default: "Unassigned" },
+            deadline: { type: String, default: "Not specified" },
+          },
+        ],
+        default: [],
+      },
+      keywords: { type: [String], default: [] },
+    },
+
+    aiStatus: {
+      type: String,
+      enum: ["idle", "processing", "completed", "failed"],
+      default: "idle",
+    },
+
+    aiGeneratedAt: {
+      type: Date,
+    },
+
     aiSummary: {
       type: String,
       default: "",

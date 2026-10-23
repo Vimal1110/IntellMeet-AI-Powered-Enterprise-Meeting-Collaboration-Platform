@@ -1,6 +1,6 @@
 import { useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
-import API from "../services/api";
+import API, { transcribeMeetingChunk, finalizeMeetingAI } from "../services/api";
 import socket from "../socket";
 
 // STUN is enough for many same-network/simple-NAT tests.
@@ -65,6 +65,30 @@ const stopSharedLocalStream = () => {
   delete window[LOCAL_STREAM_KEY];
 };
 
+const getSupportedRecordingMimeType = () => {
+  if (typeof MediaRecorder === "undefined") return "";
+
+  const mimeTypes = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm",
+  ];
+
+  return mimeTypes.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+};
+
+const getSupportedAudioRecordingMimeType = () => {
+  if (typeof MediaRecorder === "undefined") return "";
+
+  const mimeTypes = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/ogg",
+  ];
+
+  return mimeTypes.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+};
 
 function MeetingRoom() {
   const navigate = useNavigate();
@@ -93,6 +117,15 @@ function MeetingRoom() {
   const mediaRecorder = useRef(null);
   const recordingChunks = useRef([]);
   const recordingSource = useRef(null);
+
+  // AI speech-to-text recorder. This is intentionally separate from the
+  // existing video recorder so the working video recording path remains
+  // unchanged. Short audio chunks make long meetings reliable and allow
+  // the transcript to be built incrementally.
+  const aiAudioRecorder = useRef(null);
+  const aiAudioChunkIndex = useRef(0);
+  const aiAudioUploads = useRef([]);
+  const aiAudioStopPromise = useRef(null);
 
   // One RTCPeerConnection per remote participant.
   const peerConnections = useRef(new Map());
@@ -783,17 +816,95 @@ function MeetingRoom() {
   // ------------------------------------------------------------
   // Meeting recording
   // ------------------------------------------------------------
-  const getSupportedRecordingMimeType = () => {
-    if (typeof MediaRecorder === "undefined") return "";
+  const startAITranscription = useCallback((audioTrack) => {
+    if (!audioTrack || typeof MediaRecorder === "undefined") return;
 
-    const mimeTypes = [
-      "video/webm;codecs=vp9,opus",
-      "video/webm;codecs=vp8,opus",
-      "video/webm",
-    ];
+    const mimeType = getSupportedAudioRecordingMimeType();
 
-    return mimeTypes.find((type) => MediaRecorder.isTypeSupported(type)) || "";
-  };
+    if (!mimeType) {
+      console.warn("No supported audio recording MIME type for AI transcription.");
+      return;
+    }
+
+    try {
+      const audioStream = new MediaStream([audioTrack]);
+      const recorder = new MediaRecorder(
+        audioStream,
+        { mimeType },
+      );
+
+      aiAudioChunkIndex.current = 0;
+      aiAudioUploads.current = [];
+      aiAudioRecorder.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (!event.data || event.data.size === 0) return;
+
+        const index = aiAudioChunkIndex.current++;
+
+        const uploadPromise = transcribeMeetingChunk(
+          meetingId,
+          event.data,
+          index,
+        ).catch((error) => {
+          console.error(`AI transcription chunk ${index} failed:`, error);
+          setRecordingError(
+            error?.response?.data?.message ||
+              "A speech-to-text chunk could not be processed. The recording itself is still safe."
+          );
+          return null;
+        });
+
+        aiAudioUploads.current.push(uploadPromise);
+      };
+
+      recorder.onerror = (event) => {
+        console.error("AI audio recorder error:", event.error);
+      };
+
+      recorder.onstop = async () => {
+        try {
+          await Promise.allSettled(aiAudioUploads.current);
+        } finally {
+          aiAudioRecorder.current = null;
+          aiAudioStopPromise.current?.resolve();
+          aiAudioStopPromise.current = null;
+        }
+      };
+
+      // 20-second chunks keep requests small and make the transcript usable
+      // for long meetings without changing the existing video recording.
+      recorder.start(20000);
+    } catch (error) {
+      console.error("Could not start AI transcription recorder:", error);
+      aiAudioRecorder.current = null;
+    }
+  }, [meetingId]);
+
+  const stopAITranscription = useCallback(async () => {
+    const recorder = aiAudioRecorder.current;
+
+    if (!recorder) return;
+
+    if (recorder.state === "inactive") {
+      await Promise.allSettled(aiAudioUploads.current);
+      aiAudioRecorder.current = null;
+      return;
+    }
+
+    await new Promise((resolve) => {
+      aiAudioStopPromise.current = { resolve };
+
+      try {
+        recorder.stop();
+      } catch (error) {
+        console.error("Could not stop AI transcription recorder:", error);
+        aiAudioRecorder.current = null;
+        aiAudioStopPromise.current = null;
+        resolve();
+      }
+    });
+  }, []);
 
  const uploadRecording = async (blob) => {
   if (!blob || blob.size === 0) {
@@ -814,7 +925,7 @@ function MeetingRoom() {
     formData.append(
       "recording",
       blob,
-      `${meeting?.title || "IntelliMeet-Meeting"}.webm`
+      `${meeting?.title || "IntellMeet-Meeting"}.webm`
     );
 
     const response = await API.post(
@@ -844,7 +955,7 @@ function MeetingRoom() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
 
-    const title = String(meeting?.title || "IntelliMeet-Meeting")
+    const title = String(meeting?.title || "IntellMeet-Meeting")
       .replace(/[<>:"/\\|?*]+/g, "-")
       .replace(/\s+/g, "-")
       .slice(0, 80);
@@ -941,9 +1052,53 @@ function MeetingRoom() {
     audioTrack.enabled = true;
     setMicOn(true);
 
+    // Mix the local microphone with all currently connected remote audio
+    // streams. This makes the recording/transcript represent the meeting
+    // conversation instead of only the creator's microphone. If Web Audio
+    // mixing is unavailable, safely fall back to the local microphone.
+    let recordingAudioTrack = audioTrack;
+    let recordingAudioContext = null;
+
+    try {
+      if (typeof AudioContext !== "undefined") {
+        recordingAudioContext = new AudioContext();
+        const destination = recordingAudioContext.createMediaStreamDestination();
+
+        const localSource = recordingAudioContext.createMediaStreamSource(
+          new MediaStream([audioTrack]),
+        );
+        localSource.connect(destination);
+
+        Object.values(remoteParticipants).forEach((participant) => {
+          const remoteStream = participant?.stream;
+          if (!remoteStream?.getAudioTracks?.().length) return;
+
+          try {
+            const remoteSource =
+              recordingAudioContext.createMediaStreamSource(remoteStream);
+            remoteSource.connect(destination);
+          } catch (remoteAudioError) {
+            console.warn("Could not mix one remote audio stream:", remoteAudioError);
+          }
+        });
+
+        const mixedTrack = destination.stream.getAudioTracks()?.[0];
+        if (mixedTrack) recordingAudioTrack = mixedTrack;
+
+        recordingAudioContext.resume().catch(() => {});
+
+        // Keep the context alive until the video recorder finishes.
+        recordingAudioContext.__intelliMeetDestination = destination;
+      }
+    } catch (audioMixError) {
+      console.warn("Audio mixing unavailable; using local microphone:", audioMixError);
+      recordingAudioContext = null;
+      recordingAudioTrack = audioTrack;
+    }
+
     const recordingStream = new MediaStream([
       videoTrack,
-      audioTrack,
+      recordingAudioTrack,
     ]);
     const mimeType = getSupportedRecordingMimeType();
 
@@ -954,6 +1109,11 @@ function MeetingRoom() {
       recordingChunks.current = [];
       recordingSource.current = screen ? "screen" : "camera";
       mediaRecorder.current = recorder;
+
+      // Start speech-to-text independently from the video recorder. The AI
+      // recorder receives the same mixed audio track but never changes the
+      // existing video recording stream.
+      startAITranscription(recordingAudioTrack);
 
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
@@ -972,23 +1132,48 @@ function MeetingRoom() {
       };
 
       recorder.onstop = async () => {
-  const chunks = recordingChunks.current;
+        const chunks = recordingChunks.current;
 
-  const blobType =
-    recorder.mimeType || mimeType || "video/webm";
+        const blobType =
+          recorder.mimeType || mimeType || "video/webm";
 
-  const blob = new Blob(chunks, {
-    type: blobType,
-  });
+        const blob = new Blob(chunks, {
+          type: blobType,
+        });
 
-  recordingChunks.current = [];
-  mediaRecorder.current = null;
-  recordingSource.current = null;
-  setIsRecording(false);
+        recordingChunks.current = [];
+        mediaRecorder.current = null;
+        recordingSource.current = null;
+        setIsRecording(false);
 
-  // Upload recording to backend
-  await uploadRecording(blob);
-};
+        // Finish all pending speech-to-text chunks before requesting the
+        // final AI analysis. This guarantees the final summary sees the
+        // complete transcript, including the last partial chunk.
+        await stopAITranscription();
+
+        if (recordingAudioContext) {
+          try {
+            await recordingAudioContext.close();
+          } catch (audioContextError) {
+            console.debug("Audio context close skipped:", audioContextError);
+          }
+        }
+
+        // Existing recording upload remains the same. AI processing is
+        // additional and cannot prevent the recording from being saved.
+        await uploadRecording(blob);
+
+        try {
+          await finalizeMeetingAI(meetingId);
+          console.log("Final AI meeting analysis generated successfully.");
+        } catch (aiError) {
+          console.error("FINAL AI ANALYSIS ERROR:", aiError);
+          setRecordingError(
+            aiError?.response?.data?.message ||
+              "Recording saved, but AI analysis could not be completed. You can retry from Meeting Details."
+          );
+        }
+      };
 
       recorder.start(1000);
       setIsRecording(true);
@@ -1001,7 +1186,13 @@ function MeetingRoom() {
         "Could not start recording. Please check your browser permissions and try again."
       );
     }
-  }, [meeting?.title]);
+  }, [
+    meeting?.title,
+    meetingId,
+    remoteParticipants,
+    startAITranscription,
+    stopAITranscription,
+  ]);
 
   const toggleRecording = () => {
     if (isRecording) {
